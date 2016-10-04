@@ -372,19 +372,20 @@ std::vector<mVector>* motionVectorSearch(Frame* source, Frame* match, int width,
     //How far from the edge we can go since we don't special case the edges
     int inset = (int) max((float)window_size, (float)block_size);
     int iter=0;
-     
-    for (int my=inset; my<height-(inset+window_size)+1; my+=block_size) {
-      for (int mx=inset; mx<width-(inset+window_size)+1; mx+=block_size) {
-         
+    
+
+	for (int mx = inset; mx<width - (inset + window_size) + 1; mx += block_size) {
+		for (int my=inset; my<height-(inset+window_size)+1; my+=block_size) {
+
             float best_match_sad = 1e10;
             int best_match_location[2] = {0, 0};
              
-            for(int sy=my-window_size; sy<my+window_size; sy++) {
-                for(int sx=mx-window_size; sx<mx+window_size; sx++) {        
+			for (int sx = mx - window_size; sx<mx + window_size; sx++) {
+				for(int sy=my-window_size; sy<my+window_size; sy++) {
                     float current_match_sad = 0;
                     // Do the SAD
-                    for (int y=0; y<block_size; y++) {
-                        for (int x=0; x<block_size; x++) {                
+					for (int x = 0; x<block_size; x++) {
+						for (int y=0; y<block_size; y++) {
                             int match_x = mx+x;
                             int match_y = my+y;
                             int search_x = sx+x;
@@ -916,7 +917,7 @@ int main(int argc, const char * argv[]) {
 	auto dur = end - begin;
 	auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(dur).count();
 	cout << "ms: " << ms << endl;
-	system("pause");
+	//system("pause");
     return 0;
 }
 
