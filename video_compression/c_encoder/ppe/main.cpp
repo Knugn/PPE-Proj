@@ -69,19 +69,9 @@ void loadImage(int number, string path, Image** photo) {
 
 	//Matlab and LibTIFF store the image diferently.
 	//Necessary to mirror the image horizonatly to be consistent
-#ifdef OMP
-#pragma omp parallel
-//#pragma omp single
-//	cout << "Num threads: " << omp_get_num_threads() << endl;
-#pragma omp for
-#endif
-#ifdef COpt
+
 	for (int i = 0; i<(int)h; i++) {
 		for (int j = 0; j<(int)w; j++) {
-#else
-    for (int j=0; j<(int)w; j++) {
-        for (int i=0; i<(int)h; i++) {  
-#endif
             // The inversion is ON PURPOSE
             (*photo)->rc->data[(h-1-i)*w+j] = (float)TIFFGetR(raster[i*w+j]);
             (*photo)->gc->data[(h-1-i)*w+j] = (float)TIFFGetG(raster[i*w+j]);
@@ -104,14 +94,8 @@ void convertRGBtoYCbCr(Image* in, Image* out){
 #ifdef OMP
 #pragma omp parallel for 
 #endif
-
-#ifdef COpt
 	for (int x = 0; x<height; x++) {
 		for (int y = 0; y<width; y+=yIncr) {
-#else
-	for(int y=0; y<width; y+=yIncr) {
-		for (int x = 0; x<height; x++) {
-#endif
 #ifndef SIMD
 			float R = in->rc->data[x*width + y];
 			float G = in->gc->data[x*width + y];
@@ -133,16 +117,6 @@ void convertRGBtoYCbCr(Image* in, Image* out){
 				_mm_set_ps1((float)0.299),
 				_mm_set_ps1((float)0.587),
 				_mm_set_ps1((float)0.113) };
-			/*,
-				 _mm_set_ps1((float)(0.168736, 0.168736, 0.168736, 0.168736,
-				 0.331264, 0.331264, 0.331264, 0.331264,
-				 0.5, 0.5, 0.5, 0.5,
-				 0.5, 0.5, 0.5, 0.5,
-				 0.418688, 0.418688, 0.418688, 0.418688,
-				 0.081312, 0.081312, 0.081312, 0.081312,
-				 128,128,128,128
-			};*/
-
 			
 			__m128 yVec0 = _mm_mul_ps(cons[0],rVec);
 			__m128 yVec1 = _mm_add_ps(yVec0, _mm_mul_ps(cons[1], gVec));
@@ -173,8 +147,6 @@ void convertRGBtoYCbCr(Image* in, Image* out){
 		
         }
     }
-     
-    //return out;
 }
 
 #ifdef OpenCL
@@ -188,11 +160,7 @@ void setup_convertRGBtoYCbCr_cl(int width, int height) {
 	char * writable = new char[program_text.size() + 1];
 	std::copy(program_text.begin(), program_text.end(), writable);
 	writable[program_text.size()] = '\0';
-	//char* foo[1] = { program_text.c_str() };
-	//std::string program_text = load_source_file("..//kernel.cl");
-	/*if (program_text == NULL) {
-		printf("Failed to load kernel source.");
-	}*/
+
 	start_perf_measurement(&program_perf);
 	// Create the program
 	opencl_program = clCreateProgramWithSource(opencl_context, 1,(const char **)&writable, NULL, &error);
@@ -239,29 +207,20 @@ void setup_convertRGBtoYCbCr_cl(int width, int height) {
 
 }
 
-void copy_data_to_device(Image* in, Image* out) {
+void copy_data_to_device(cl_mem buffer_to_write_to, float *input_buffer, int nbytes) {
 	cl_int error;
 	// Copy data to the device
-	int in_size = in->width * in->height * sizeof(float);
+	//int in_size = in->width * in->height * sizeof(float);
 
-	error = clEnqueueWriteBuffer(opencl_queue, in_R, CL_FALSE, 0, in_size, in->rc->data, 0, NULL, NULL);
+	/*error = clEnqueueWriteBuffer(opencl_queue, in_R, CL_FALSE, 0, in_size, in->rc->data, 0, NULL, NULL);
 	checkError(error, "clEnqueueWriteBuffer");
 	error = clEnqueueWriteBuffer(opencl_queue, in_G, CL_FALSE, 0, in_size, in->gc->data, 0, NULL, NULL);
 	checkError(error, "clEnqueueWriteBuffer");
 	error = clEnqueueWriteBuffer(opencl_queue, in_B, CL_FALSE, 0, in_size, in->bc->data, 0, NULL, NULL);
-	checkError(error, "clEnqueueWriteBuffer");
+	checkError(error, "clEnqueueWriteBuffer");*/
 
-	int out_size = out->width * out->height * sizeof(float);
-
-	error = clEnqueueWriteBuffer(opencl_queue, out_Y, CL_FALSE, 0, out_size, out->rc->data, 0, NULL, NULL);
+	error = clEnqueueWriteBuffer(opencl_queue, buffer_to_write_to, CL_FALSE, 0, nbytes, input_buffer, 0, NULL, NULL);
 	checkError(error, "clEnqueueWriteBuffer");
-	error = clEnqueueWriteBuffer(opencl_queue, out_Cb, CL_FALSE, 0, out_size, out->gc->data, 0, NULL, NULL);
-	checkError(error, "clEnqueueWriteBuffer");
-	error = clEnqueueWriteBuffer(opencl_queue, out_Cr, CL_FALSE, 0, out_size, out->bc->data, 0, NULL, NULL);
-	checkError(error, "clEnqueueWriteBuffer");
-
-	error = clFinish(opencl_queue);
-	checkError(error, "clFinish");
 }
 
 void read_back_data(cl_mem buffer_to_read_from, float *result_buffer, int nbytes) {
@@ -269,19 +228,25 @@ void read_back_data(cl_mem buffer_to_read_from, float *result_buffer, int nbytes
 	// Enqueue a read to get the data back
 	error = clEnqueueReadBuffer(opencl_queue, buffer_to_read_from, CL_FALSE, 0, nbytes, result_buffer, 0, NULL, NULL);
 	checkError(error, "clEnqueueReadBuffer");
-	clFinish(opencl_queue);
 }
 
 
 
 void convertRGBtoYCbCr_cl(Image* in, Image* out) 
 {
+	cl_int error;
+
 	start_perf_measurement(&write_perf);
-	copy_data_to_device(in, out);
+	//copy_data_to_device(in, out);
+	int n_input_bytes = in->width * in->height * sizeof(float);
+	copy_data_to_device(in_R, in->rc->data, n_input_bytes);
+	copy_data_to_device(in_G, in->gc->data, n_input_bytes);
+	copy_data_to_device(in_B, in->bc->data, n_input_bytes);
+	error = clFinish(opencl_queue);
+	checkError(error, "clFinish");
 	stop_perf_measurement(&write_perf);
 
 	start_perf_measurement(&convert_perf);
-	cl_int error;
 	// Set the kernel arguments
 	error = clSetKernelArg(convert_kernel, 0, sizeof(in_R), &in_R);
 	checkError(error, "clSetKernelArg in");
@@ -297,9 +262,9 @@ void convertRGBtoYCbCr_cl(Image* in, Image* out)
 	checkError(error, "clSetKernelArg in");
 
 	// Enqueue the kernel
-	size_t global_dimensions[3] = { in->width, in->height };
-	size_t local_dimensions[3] = { opencl_cores, 1 };
-	error = clEnqueueNDRangeKernel(opencl_queue, convert_kernel, 2, NULL, global_dimensions, local_dimensions, 0, NULL, NULL);
+	size_t global_dimensions[1] = { in->width * in->height };
+	size_t local_dimensions[1] = { opencl_cores };
+	error = clEnqueueNDRangeKernel(opencl_queue, convert_kernel, 1, NULL, global_dimensions, local_dimensions, 0, NULL, NULL);
 	checkError(error, "clEnqueueNDRangeKernel");
 	clFinish(opencl_queue);
 	stop_perf_measurement(&convert_perf);
@@ -309,9 +274,11 @@ void convertRGBtoYCbCr_cl(Image* in, Image* out)
 	read_back_data(out_Y, out->rc->data, nbytes);
 	read_back_data(out_Cb, out->gc->data, nbytes);
 	read_back_data(out_Cr, out->bc->data, nbytes);
+	error = clFinish(opencl_queue);
+	checkError(error, "clFinish");
 	stop_perf_measurement(&read_perf);
 
-	clFinish(opencl_queue);
+	
 }
 #endif
 
@@ -334,19 +301,14 @@ Channel* lowPass(Channel* in, Channel* out){
 	int height = in->height;
      
     //out = in; TODO Is this necessary?
-	//for(int i=0; i<width*height; i++) out->data[i] =in->data[i];
+	for(int i=0; i<width*height; i++) out->data[i] =in->data[i];
 
 	// In X
 #ifdef OMP
 #pragma omp parallel for 
 #endif
-#ifdef COpt
 	for (int x = 1; x<(height - 1); x++) {
-		for (int y = 0; y<(width - 1); y+=yIncr) {
-#else
-    for (int y=0; y<(width-1); y+=yIncr) {
-        for (int x=1; x<(height-1); x++) {
-#endif
+		for (int y = 1; y<(width - 1); y+=yIncr) {
 #ifndef SIMD
             out->data[x*width+y] = a*in->data[(x-1)*width+y]+b*in->data[x*width+y]+c*in->data[(x+1)*width+y];
 #else
@@ -367,13 +329,8 @@ Channel* lowPass(Channel* in, Channel* out){
 #ifdef OMP
 #pragma omp parallel for 
 #endif
-#ifdef COpt
 	for (int x = 1; x<(height - 1); x++) {
-		for (int y = 0; y<(width - 1); y+=yIncr) {
-#else
-	for (int y = 0; y<(width - 1); y+=yIncr) {
-		for (int x = 1; x<(height - 1); x++) {
-#endif
+		for (int y = 1; y<(width - 1); y+=yIncr) {
 #ifndef SIMD
             out->data[x*width+y] = a*out->data[x*width+(y-1)]+b*out->data[x*width+y]+c*out->data[x*width+(y+1)];
 #else
@@ -963,6 +920,7 @@ int main(int argc, const char * argv[]) {
     return 0;
 }
 
+#ifdef OpenCL
 void init_all_perfs() {
 	init_perf(&total_perf);
 	init_perf(&convert_perf);
@@ -996,3 +954,4 @@ void print_perfs() {
 	print_perf_measurement(&cleanup_perf);
 
 }
+#endif
