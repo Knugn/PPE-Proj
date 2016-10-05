@@ -121,7 +121,12 @@ int init_opencl (cl_device_type device_type, cl_device_id *device, cl_context *c
 	error = clGetDeviceInfo(*device, CL_DEVICE_MAX_WORK_GROUP_SIZE, 1000, &mwgs, NULL);
 	checkError(error, "Failed to get max work group size.");
 	printf("Max work group size: \"%d\".\n", mwgs);
-	
+
+	size_t lms;
+	error = clGetDeviceInfo(*device, CL_DEVICE_LOCAL_MEM_SIZE, 1000, &lms, NULL);
+	checkError(error, "Failed to get local memory size.");
+	printf("Local memory size size: \"%d\".\n", lms);
+
 	// Create our context for the device
 	printf("OpenCL: Creating a context for the device.\n");
 	*context = clCreateContext(NULL, 1, device, NULL, NULL, &error);
