@@ -252,13 +252,13 @@ void convertRGBtoYCbCr_cl(Image* in, Image* out)
 	checkError(error, "clSetKernelArg in");
 	error = clSetKernelArg(convert_kernel, 1, sizeof(in_G), &in_G);
 	checkError(error, "clSetKernelArg in");
-	error = clSetKernelArg(convert_kernel, 2, sizeof(in_B), &in_G);
+	error = clSetKernelArg(convert_kernel, 2, sizeof(in_B), &in_B);
 	checkError(error, "clSetKernelArg in");
 	error = clSetKernelArg(convert_kernel, 3, sizeof(out_Y), &out_Y);
 	checkError(error, "clSetKernelArg in");
-	error = clSetKernelArg(convert_kernel, 4, sizeof(out_Cr), &out_Cr);
+	error = clSetKernelArg(convert_kernel, 4, sizeof(out_Cb), &out_Cb);
 	checkError(error, "clSetKernelArg in");
-	error = clSetKernelArg(convert_kernel, 5, sizeof(out_Cb), &out_Cb);
+	error = clSetKernelArg(convert_kernel, 5, sizeof(out_Cr), &out_Cr);
 	checkError(error, "clSetKernelArg in");
 
 	// Enqueue the kernel
@@ -266,14 +266,15 @@ void convertRGBtoYCbCr_cl(Image* in, Image* out)
 	size_t local_dimensions[1] = { opencl_cores };
 	error = clEnqueueNDRangeKernel(opencl_queue, convert_kernel, 1, NULL, global_dimensions, local_dimensions, 0, NULL, NULL);
 	checkError(error, "clEnqueueNDRangeKernel");
-	clFinish(opencl_queue);
+	error = clFinish(opencl_queue);
+	checkError(error, "running kernel");
 	stop_perf_measurement(&convert_perf);
 
 	start_perf_measurement(&read_perf);
-	int nbytes = out->width*out->height*sizeof(float);
-	read_back_data(out_Y, out->rc->data, nbytes);
-	read_back_data(out_Cb, out->gc->data, nbytes);
-	read_back_data(out_Cr, out->bc->data, nbytes);
+	int n_output_bytes = out->width * out->height * sizeof(float);
+	read_back_data(out_Y, out->rc->data, n_output_bytes);
+	read_back_data(out_Cb, out->gc->data, n_output_bytes);
+	read_back_data(out_Cr, out->bc->data, n_output_bytes);
 	error = clFinish(opencl_queue);
 	checkError(error, "clFinish");
 	stop_perf_measurement(&read_perf);

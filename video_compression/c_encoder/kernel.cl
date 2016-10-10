@@ -3,27 +3,18 @@ kernel void convert_RGB_to_YCbCr(
 	global float* R, global float* G, global float* B,
 	global float* Y, global float* Cb, global float* Cr) 
 {
-	//int width = get_global_size(0);
-	//int height = get_global_size(1);
-	
-	
-	//int px = get_global_id(0);
-	//int py = get_global_id(1);
+	int size = get_global_size(0);
 	int idx = get_global_id(0);
+	if (idx >= size) return;
 
-	//float r = R[py*width + px];
-	//float g = G[py*width + px];
-	//float b = B[py*width + px];
 	float r = R[idx];
 	float g = G[idx];
 	float b = B[idx];
+
 	float y = 0 + ((float)0.299*r) + ((float)0.587*g) + ((float)0.113*b);
 	float cb = 128 - ((float)0.168736*r) - ((float)0.331264*g) + ((float)0.5*b);
 	float cr = 128 + ((float)0.5*r) - ((float)0.418688*g) - ((float)0.081312*b);
 
-	//Y[py*width + px] = y;
-	//Cb[py*width + px] = cb;
-	//Cr[py*width + px] = cr;
 	Y[idx] = y;
 	Cb[idx] = cb;
 	Cr[idx] = cr;
