@@ -35,8 +35,8 @@ cl_device_id opencl_device;
 cl_context opencl_context;
 cl_command_queue opencl_queue;
 cl_program opencl_program;
-cl_kernel convert_kernel;
-cl_mem in_R, in_G, in_B, out_Y, out_Cb, out_Cr;
+cl_kernel convert_kernel, blur_kernel;
+cl_mem in_R, in_G, in_B, out_Y, out_Cb, out_Cr, out_Cb_blurred, out_Cr_blurred;
 perf program_perf, create_perf, write_perf, read_perf, finish_perf, cleanup_perf;
 perf total_perf, convert_perf;
 void init_all_perfs();
@@ -150,7 +150,7 @@ void convertRGBtoYCbCr(Image* in, Image* out){
 }
 
 #ifdef OpenCL
-void setup_convertRGBtoYCbCr_cl(int width, int height) {
+void setup_cl(int width, int height) {
 	cl_int error;
 	std::string sourcePath = "..//kernel.cl";
 	std::ifstream sourceFile(sourcePath);
@@ -182,6 +182,10 @@ void setup_convertRGBtoYCbCr_cl(int width, int height) {
 	// Create the computation kernel
 	convert_kernel = clCreateKernel(opencl_program, "convert_RGB_to_YCbCr", &error);
 	checkError(error, "clCreateKernel");
+
+	blur_kernel = clCreateKernel(opencl_program, "blur", &error);
+	checkError(error, "clCreateKernel");
+
 	stop_perf_measurement(&program_perf);
 
 	int image_byte_size = width*height*sizeof(float);
@@ -200,6 +204,11 @@ void setup_convertRGBtoYCbCr_cl(int width, int height) {
 	checkError(error, "clCreateBuffer");
 	out_Cr = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
 	checkError(error, "clCreateBuffer");
+
+	out_Cb_blurred = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
+	checkError(error, "clCreateBuffer");
+	out_Cr_blurred = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
+	checkError(error, "clCreateBuffer");
 	stop_perf_measurement(&create_perf);
 
 	delete writable;
@@ -209,16 +218,6 @@ void setup_convertRGBtoYCbCr_cl(int width, int height) {
 
 void copy_data_to_device(cl_mem buffer_to_write_to, float *input_buffer, int nbytes) {
 	cl_int error;
-	// Copy data to the device
-	//int in_size = in->width * in->height * sizeof(float);
-
-	/*error = clEnqueueWriteBuffer(opencl_queue, in_R, CL_FALSE, 0, in_size, in->rc->data, 0, NULL, NULL);
-	checkError(error, "clEnqueueWriteBuffer");
-	error = clEnqueueWriteBuffer(opencl_queue, in_G, CL_FALSE, 0, in_size, in->gc->data, 0, NULL, NULL);
-	checkError(error, "clEnqueueWriteBuffer");
-	error = clEnqueueWriteBuffer(opencl_queue, in_B, CL_FALSE, 0, in_size, in->bc->data, 0, NULL, NULL);
-	checkError(error, "clEnqueueWriteBuffer");*/
-
 	error = clEnqueueWriteBuffer(opencl_queue, buffer_to_write_to, CL_FALSE, 0, nbytes, input_buffer, 0, NULL, NULL);
 	checkError(error, "clEnqueueWriteBuffer");
 }
@@ -229,7 +228,6 @@ void read_back_data(cl_mem buffer_to_read_from, float *result_buffer, int nbytes
 	error = clEnqueueReadBuffer(opencl_queue, buffer_to_read_from, CL_FALSE, 0, nbytes, result_buffer, 0, NULL, NULL);
 	checkError(error, "clEnqueueReadBuffer");
 }
-
 
 
 void convertRGBtoYCbCr_cl(Image* in, Image* out) 
@@ -358,6 +356,32 @@ Channel* lowPass(Channel* in, Channel* out){
     return out;
 }
 
+#ifdef OpenCL
+Channel* lowPass_cl(cl_mem in_buffer, cl_mem out_buffer, Channel* out)
+{
+	cl_int error;
+	error = clSetKernelArg(blur_kernel, 0, sizeof(in_buffer), &in_buffer);
+	checkError(error, "clSetKernelArg in");
+	error = clSetKernelArg(blur_kernel, 1, sizeof(out_buffer), &out_buffer);
+	checkError(error, "clSetKernelArg in");
+
+	// Enqueue the kernel
+	size_t global_dimensions[2] = { out->width, out->height };
+	size_t local_dimensions[2] = { 32, 32 };
+	error = clEnqueueNDRangeKernel(opencl_queue, blur_kernel, 2, NULL, global_dimensions, local_dimensions, 0, NULL, NULL);
+	checkError(error, "clEnqueueNDRangeKernel");
+	error = clFinish(opencl_queue);
+	checkError(error, "running kernel");
+	//stop_perf_measurement(&convert_perf);
+
+	//start_perf_measurement(&read_perf);
+	int n_output_bytes = out->width * out->height * sizeof(float);
+	read_back_data(out_buffer, out->data, n_output_bytes);
+	error = clFinish(opencl_queue);
+	checkError(error, "clFinish");
+	//stop_perf_measurement(&read_perf);
+}
+#endif
 
 std::vector<mVector>* motionVectorSearch(Frame* source, Frame* match, int width, int height) {
     std::vector<mVector> *motion_vectors = new std::vector<mVector>(); // empty list of ints
@@ -690,7 +714,7 @@ int encode() {
     int npixels = width*height;
 
 #ifdef OpenCL
-	setup_convertRGBtoYCbCr_cl(width, height);
+	setup_cl(width, height);
 #endif
  
 	delete frame_rgb;
@@ -729,8 +753,13 @@ int encode() {
         Channel* frame_blur_cr = new Channel(width, height);
 		Frame *frame_lowpassed = new Frame(width, height, FULLSIZE);
 		
+#ifndef OpenCL
 		lowPass(frame_ycbcr->gc, frame_blur_cb);
 		lowPass(frame_ycbcr->bc, frame_blur_cr);
+#else
+		lowPass_cl(out_Cb, out_Cb_blurred, frame_blur_cb);
+		lowPass_cl(out_Cr, out_Cr_blurred, frame_blur_cr);
+#endif
 
 		frame_lowpassed->Y->copy(frame_ycbcr->rc);
 		frame_lowpassed->Cb->copy(frame_blur_cb);

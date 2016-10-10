@@ -20,7 +20,73 @@ kernel void convert_RGB_to_YCbCr(
 	Cr[idx] = cr;
 }
 
+kernel void blur(global float* in, global float* out)
+{
+	float a = 0.25f;
+	float b = 0.5f;
+	float c = 0.25f;
 
+	local float tile_in[1024];
+	local float tile_mid[1024];
+
+	int width = get_global_size(0);
+	int height = get_global_size(1);
+
+	int local_width = get_local_size(0);
+	int local_height = get_local_size(1);
+
+	int x = get_global_id(0);
+	int y = get_global_id(1);
+
+	int local_x = get_local_id(0);
+	int local_y = get_local_id(1);
+
+	tile_in[local_y*local_width + local_x] = in[y*width + x];
+
+	/*
+	if (x == 0 || x == width - 1 || y == 0 || y == height - 1) {
+		out[y*width + x] = in[y*width + x];
+		return;
+	}*/
+	if (x >= width || y >= height)
+		return;
+	if (local_y == 0 || local_y >= local_height - 1) {
+		out[y*width + x] = tile_in[local_y*local_width + local_x];
+		return;
+	}
+
+	barrier(CLK_LOCAL_MEM_FENCE);
+
+	tile_mid[local_y*local_width + local_x] =
+		a*tile_in[(local_y - 1)*local_width + local_x] +
+		b*tile_in[(local_y + 0)*local_width + local_x] +
+		c*tile_in[(local_y + 1)*local_width + local_x];
+	
+	if (local_x == 0 || local_x >= local_width - 1) {
+		out[y*width + x] = tile_mid[local_y*local_width + local_x];
+		return;
+	}
+
+	barrier(CLK_LOCAL_MEM_FENCE);
+
+	out[y*width + x] =
+		a*tile_mid[(local_y)*local_width + local_x - 1] +
+		b*tile_mid[(local_y)*local_width + local_x + 0] +
+		c*tile_mid[(local_y)*local_width + local_x + 1];
+	/*
+	float result =
+		a * (a * in[(y - 1)*width + x - 1] + b* in[(y + 0)*width + x - 1] + c * in[(y + 1)*width + x - 1]) +
+		b * (a * in[(y - 1)*width + x + 0] + b* in[(y + 0)*width + x + 0] + c * in[(y + 1)*width + x + 0]) +
+		c * (a * in[(y - 1)*width + x + 1] + b* in[(y + 0)*width + x + 1] + c * in[(y + 1)*width + x + 1]);
+	*/
+	/*
+	float result =
+		a*(a * in[(y - 1)*width + x - 1] + b * in[(y - 1)*width + x] + c * in[(y - 1)*width + x + 1]) +
+		b*(a * in[(y + 0)*width + x - 1] + b * in[(y + 0)*width + x] + c * in[(y + 0)*width + x + 1]) +
+		c*(a * in[(y + 1)*width + x - 1] + b * in[(y + 1)*width + x] + c * in[(y + 1)*width + x + 1]);
+		*/
+	//out[y*width + x] = result;
+}
 
 /*
 kernel void update(global float *in, global float *out) {
