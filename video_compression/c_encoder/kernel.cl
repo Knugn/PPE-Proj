@@ -29,6 +29,8 @@ kernel void convert_RGB_to_YCbCr(
 	Cr[idx] = cr;
 }
 
+
+
 /*
 kernel void update(global float *in, global float *out) {
 	int WIDTH = get_global_size(0);

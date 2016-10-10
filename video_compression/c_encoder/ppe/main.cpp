@@ -372,24 +372,24 @@ std::vector<mVector>* motionVectorSearch(Frame* source, Frame* match, int width,
     //How far from the edge we can go since we don't special case the edges
     int inset = (int) max((float)window_size, (float)block_size);
     int iter=0;
-    
 
 	for (int mx = inset; mx<width - (inset + window_size) + 1; mx += block_size) {
-		for (int my=inset; my<height-(inset+window_size)+1; my+=block_size) {
+		for (int my = inset; my<height - (inset + window_size) + 1; my += block_size) {
 
             float best_match_sad = 1e10;
             int best_match_location[2] = {0, 0};
-             
+
 			for (int sx = mx - window_size; sx<mx + window_size; sx++) {
-				for(int sy=my-window_size; sy<my+window_size; sy++) {
+				for (int sy = my - window_size; sy<my + window_size; sy++) {
                     float current_match_sad = 0;
                     // Do the SAD
 					for (int x = 0; x<block_size; x++) {
-						for (int y=0; y<block_size; y++) {
+						for (int y = 0; y<block_size; y++) {
                             int match_x = mx+x;
                             int match_y = my+y;
                             int search_x = sx+x;
                             int search_y = sy+y;
+
                             float diff_Y = abs(match->Y->data[match_x*width+match_y] - source->Y->data[search_x*width+search_y]);
                             float diff_Cb = abs(match->Cb->data[match_x*width+match_y] - source->Cb->data[search_x*width+search_y]);
                             float diff_Cr = abs(match->Cr->data[match_x*width+match_y] - source->Cr->data[search_x*width+search_y]);
@@ -415,7 +415,7 @@ std::vector<mVector>* motionVectorSearch(Frame* source, Frame* match, int width,
  
         }
     }
-     
+
     return motion_vectors;
 }
 
@@ -431,8 +431,9 @@ Frame* computeDelta(Frame* i_frame_ycbcr, Frame* p_frame_ycbcr, std::vector<mVec
     int inset = (int) max((float) window_size, (float)block_size);
      
     int current_block = 0;
-    for(int my=inset; my<width-(inset+window_size)+1; my+=block_size) {
-        for(int mx=inset; mx<height-(inset+window_size)+1; mx+=block_size) {
+	for (int mx = inset; mx<height - (inset + window_size) + 1; mx += block_size) {
+		for(int my=inset; my<width-(inset+window_size)+1; my+=block_size) {
+        
             int vector[2];
             vector[0]=(int)motion_vectors->at(current_block).a;
             vector[1]=(int)motion_vectors->at(current_block).b;
