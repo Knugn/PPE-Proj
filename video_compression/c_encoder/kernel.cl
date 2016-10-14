@@ -71,10 +71,105 @@ kernel void blur(global float* in, global float* out)
 
 }
 
+#define BLOCK_SIZE				16
+#define WINDOWS_SIZE			16
+#define BLOCKS_PER_WG_X			2
+#define BLOCKS_PER_WG_Y			1
+#define NUM_LCL_MAT_PIXELS_X	(BLOCKS_PER_WG_X*BLOCK_SIZE)
+#define NUM_LCL_MAT_PIXELS_Y	(BLOCKS_PER_WG_Y*BLOCK_SIZE)
+#define NUM_LCL_MAT_PIXELS		(NUM_LCL_MAT_PIXELS_X*NUM_LCL_MAT_PIXELS_Y)
+#define NUM_LCL_SRC_PIXELS_X	((2 + BLOCKS_PER_WG_X)*BLOCK_SIZE)
+#define NUM_LCL_SRC_PIXELS_Y	((2 + BLOCKS_PER_WG_Y)*BLOCK_SIZE)
+#define NUM_LCL_SRC_PIXELS		(NUM_LCL_SRC_PIXELS_X*NUM_LCL_SRC_PIXELS_Y)
+//#define WG_SIZE 256
+#define Y_WEIGHT	0.5
+#define CB_WEIGHT	0.25
+#define CR_WEIGHT	0.25
+
+kernel void motion_vector_search_smart(
+	int width,
+	global float* srcY, global float* srcCb, global float* srcCr,
+	global float* matY, global float* matCb, global float* matCr,
+	global float* colSADs)
+{
+	int gSizeX = get_global_size(0);
+	int gSizeY = get_global_size(1);
+
+	int gidx = get_global_id(0);
+	int gidy = get_global_id(1);
+
+	int wgs = get_local_size(2);
+	int lid = get_local_id(2);
+
+	local float lSrcY[NUM_LCL_SRC_PIXELS];
+	local float lSrcCb[NUM_LCL_SRC_PIXELS];
+	local float lSrcCr[NUM_LCL_SRC_PIXELS];
+
+	local float lMatY[NUM_LCL_MAT_PIXELS];
+	local float lMatCb[NUM_LCL_MAT_PIXELS];
+	local float lMatCr[NUM_LCL_MAT_PIXELS];
+
+	int baseMatPixY = gidy * BLOCK_SIZE + WINDOWS_SIZE;
+	int baseMatPixX = gidx * BLOCK_SIZE + WINDOWS_SIZE;
+
+	for (int lMatPixIdx = lid; lMatPixIdx < NUM_LCL_MAT_PIXELS; lMatPixIdx += wgs)
+	{
+		int lMatPixY = lMatPixIdx / NUM_LCL_MAT_PIXELS_X;
+		int lMatPixX = lMatPixIdx % NUM_LCL_MAT_PIXELS_X;
+		int gMatPixY = baseMatPixY + lMatPixY;
+		int gMatPixX = baseMatPixX + lMatPixX;
+		int gMatPixIdx = gMatPixY*width + gMatPixX;
+		lMatY[lMatPixIdx] = matY[gMatPixIdx];
+		lMatCb[lMatPixIdx] = matCb[gMatPixIdx];
+		lMatCr[lMatPixIdx] = matCr[gMatPixIdx];
+	}
+
+	int baseSrcPixY = baseMatPixY - WINDOWS_SIZE;
+	int baseSrcPixX = baseMatPixX - WINDOWS_SIZE;
+
+	for (int lSrcPixIdx = lid; lSrcPixIdx < NUM_LCL_MAT_PIXELS; lSrcPixIdx += wgs)
+	{
+		int lSrcPixY = lSrcPixIdx / NUM_LCL_SRC_PIXELS_X;
+		int lSrcPixX = lSrcPixIdx % NUM_LCL_SRC_PIXELS_X;
+		int gSrcPixY = baseSrcPixY + lSrcPixY;
+		int gSrcPixX = baseSrcPixX + lSrcPixX;
+		int gSrcPixIdx = gSrcPixY*width + gSrcPixX;
+		lSrcY[lSrcPixIdx] = srcY[gSrcPixIdx];
+		lSrcCb[lSrcPixIdx] = srcCb[gSrcPixIdx];
+		lSrcCr[lSrcPixIdx] = srcCr[gSrcPixIdx];
+	}
+	
+	// We will only work on one source row at a time
+	// Discard superflous work items (unlikely)
+	if (lid >= NUM_LCL_MAT_PIXELS_X * WINDOWS_SIZE * 2)
+		return;
+
+	int lSrcPixXBase = lid / NUM_LCL_MAT_PIXELS_X;
+	int lSrcPixXOffset = lid / NUM_LCL_MAT_PIXELS_X;
+	int lMatPixX = lSrcPixXBase + lSrcPixXOffset;
+
+	// TODO: need another loop layer in case we have too few work items
+	for (int lSrcPixYBase = 0; lSrcPixYBase < WINDOWS_SIZE * 2; lSrcPixYBase++) {
+		float colSAD = 0;
+		for (int lMatPixY = 0; lMatPixY < BLOCK_SIZE; lMatPixY++) {
+			int lSrcPixY = lSrcPixYBase + lMatPixY;
+			int lSrcPixIdx = lSrcPixY * NUM_LCL_SRC_PIXELS_X + lMatPixX;
+			int lMatPixIdx = lMatPixY * NUM_LCL_MAT_PIXELS_X + lMatPixX;
+			float diffY = fabs(lMatY[lMatPixIdx] - lSrcY[lSrcPixIdx]);
+			float diffCb = fabs(lMatCb[lMatPixIdx] - lSrcCb[lSrcPixIdx]);
+			float diffCr = fabs(lMatCr[lMatPixIdx] - lSrcCr[lSrcPixIdx]);
+			float diffTotal = Y_WEIGHT*diffY + CB_WEIGHT*diffCb + CR_WEIGHT*diffCr;
+			colSAD += diffTotal;
+		}
+		// TODO: write to colSADs[]
+	}
+		
+}
+
 #define TILE_WIDTH 16
 #define TILE_HEIGHT 16
 
-kernel void motion_vector_search(
+kernel void motion_vector_search_stupid(
 	int width,
 	int numTarTilesX,
 	global float* srcY, global float* srcCb, global float* srcCr,
