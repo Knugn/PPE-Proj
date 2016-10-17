@@ -30,13 +30,23 @@ using namespace std;
 #endif
 
 #ifdef OpenCL
+#define NUM_LCL_SAD_VALUES_X	(WINDOW_SIZE*2)
+#define NUM_LCL_SAD_VALUES_Y	(WINDOW_SIZE*2)
+#define NUM_LCL_SAD_VALUES		(NUM_LCL_SAD_VALUES_X*NUM_LCL_SAD_VALUES_Y)
+
 int opencl_cores = 1024;
 cl_device_id opencl_device;
 cl_context opencl_context;
 cl_command_queue opencl_queue;
 cl_program opencl_program;
-cl_kernel convert_kernel, blur_kernel;
-cl_mem in_R, in_G, in_B, out_Y, out_Cb, out_Cr, out_Cb_blurred, out_Cr_blurred;
+cl_kernel convert_kernel, blur_kernel, mvs_kernel;
+cl_mem in_R, in_G, in_B;
+cl_mem Y_buffer, Cb_buffer, Cr_buffer, Cb_blurred_buffer, Cr_blurred_buffer;
+cl_mem Y_buffer_prev, Cb_blurred_buffer_prev, Cr_blurred_buffer_prev;
+cl_mem SAD_buffer;
+
+int num_match_blocks_x, num_match_blocks_y, nSADsTotal, nSADBytes;
+
 perf program_perf, create_perf, write_perf, read_perf, finish_perf, cleanup_perf;
 perf total_perf, convert_perf;
 void init_all_perfs();
@@ -186,6 +196,19 @@ void setup_cl(int width, int height) {
 	blur_kernel = clCreateKernel(opencl_program, "blur", &error);
 	checkError(error, "clCreateKernel");
 
+	mvs_kernel = clCreateKernel(opencl_program, "motion_vector_search", &error);
+	checkError(error, "clCreateKernel");
+
+	cl_ulong kernel_size;
+	error = clGetKernelWorkGroupInfo(mvs_kernel, opencl_device, CL_KERNEL_LOCAL_MEM_SIZE, sizeof(cl_ulong), &kernel_size, NULL);
+	checkError(error, "clGetKernelWorkGroupInfo");
+	printf("MVS kernel local mem size: \"%d\".\n", kernel_size);
+
+	num_match_blocks_x = (width - (2 * WINDOW_SIZE)) / BLOCK_SIZE;
+	num_match_blocks_y = (height - (2 * WINDOW_SIZE)) / BLOCK_SIZE;
+	nSADsTotal = num_match_blocks_x*num_match_blocks_y*NUM_LCL_SAD_VALUES;
+	nSADBytes = nSADsTotal*sizeof(float);
+	
 	stop_perf_measurement(&program_perf);
 
 	int image_byte_size = width*height*sizeof(float);
@@ -198,17 +221,28 @@ void setup_cl(int width, int height) {
 	in_B = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
 	checkError(error, "clCreateBuffer");
 
-	out_Y = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
+	Y_buffer = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
 	checkError(error, "clCreateBuffer");
-	out_Cb = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
+	Cb_buffer = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
 	checkError(error, "clCreateBuffer");
-	out_Cr = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
+	Cr_buffer = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
 	checkError(error, "clCreateBuffer");
 
-	out_Cb_blurred = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
+	Cb_blurred_buffer = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
 	checkError(error, "clCreateBuffer");
-	out_Cr_blurred = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
+	Cr_blurred_buffer = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
 	checkError(error, "clCreateBuffer");
+	
+	Y_buffer_prev = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
+	checkError(error, "clCreateBuffer");
+	Cb_blurred_buffer_prev = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
+	checkError(error, "clCreateBuffer");
+	Cr_blurred_buffer_prev = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, image_byte_size, NULL, &error);
+	checkError(error, "clCreateBuffer");
+
+	SAD_buffer = clCreateBuffer(opencl_context, CL_MEM_READ_WRITE, nSADBytes, NULL, &error);
+	checkError(error, "clCreateBuffer");
+
 	stop_perf_measurement(&create_perf);
 
 	delete writable;
@@ -252,11 +286,11 @@ void convertRGBtoYCbCr_cl(Image* in, Image* out)
 	checkError(error, "clSetKernelArg in");
 	error = clSetKernelArg(convert_kernel, 2, sizeof(in_B), &in_B);
 	checkError(error, "clSetKernelArg in");
-	error = clSetKernelArg(convert_kernel, 3, sizeof(out_Y), &out_Y);
+	error = clSetKernelArg(convert_kernel, 3, sizeof(Y_buffer), &Y_buffer);
 	checkError(error, "clSetKernelArg in");
-	error = clSetKernelArg(convert_kernel, 4, sizeof(out_Cb), &out_Cb);
+	error = clSetKernelArg(convert_kernel, 4, sizeof(Cb_buffer), &Cb_buffer);
 	checkError(error, "clSetKernelArg in");
-	error = clSetKernelArg(convert_kernel, 5, sizeof(out_Cr), &out_Cr);
+	error = clSetKernelArg(convert_kernel, 5, sizeof(Cr_buffer), &Cr_buffer);
 	checkError(error, "clSetKernelArg in");
 
 	// Enqueue the kernel
@@ -270,9 +304,9 @@ void convertRGBtoYCbCr_cl(Image* in, Image* out)
 
 	start_perf_measurement(&read_perf);
 	int n_output_bytes = out->width * out->height * sizeof(float);
-	read_back_data(out_Y, out->rc->data, n_output_bytes);
-	read_back_data(out_Cb, out->gc->data, n_output_bytes);
-	read_back_data(out_Cr, out->bc->data, n_output_bytes);
+	read_back_data(Y_buffer, out->rc->data, n_output_bytes);
+	read_back_data(Cb_buffer, out->gc->data, n_output_bytes);
+	read_back_data(Cr_buffer, out->bc->data, n_output_bytes);
 	error = clFinish(opencl_queue);
 	checkError(error, "clFinish");
 	stop_perf_measurement(&read_perf);
@@ -444,6 +478,63 @@ std::vector<mVector>* motionVectorSearch(Frame* source, Frame* match, int width,
     return motion_vectors;
 }
 
+#ifdef OpenCL
+std::vector<mVector>* motionVectorSearch_cl(Frame* source, Frame* match, int width, int height) 
+{
+	cl_int error;
+	error = clSetKernelArg(mvs_kernel, 0, sizeof(int), &width);
+	checkError(error, "clSetKernelArg in");
+	cl_mem args[7] = {
+		Y_buffer_prev, Cb_blurred_buffer_prev, Cr_blurred_buffer_prev,
+		Y_buffer, Cb_blurred_buffer, Cr_blurred_buffer,
+		SAD_buffer
+	};
+	for (int i = 0; i < 7; i++) {
+		error = clSetKernelArg(mvs_kernel, i+1, sizeof(args[i]), &(args[i]));
+		checkError(error, "clSetKernelArg in");
+	}
+	
+	
+	// Enqueue the kernel
+	size_t work_group_size = 512;
+	size_t local_dimensions[3] = { 1, 1, work_group_size };
+	size_t global_dimensions[3] = { num_match_blocks_x, num_match_blocks_y, work_group_size };
+	
+	error = clEnqueueNDRangeKernel(opencl_queue, mvs_kernel, 3, NULL, global_dimensions, local_dimensions, 0, NULL, NULL);
+	checkError(error, "clEnqueueNDRangeKernel");
+	error = clFinish(opencl_queue);
+	checkError(error, "running kernel");
+
+	
+	float* SADs = new float[nSADsTotal];
+	read_back_data(SAD_buffer, SADs, nSADBytes);
+	std::vector<mVector> *motion_vectors = new std::vector<mVector>(); // empty list of ints
+	for (int my = 0; my < num_match_blocks_y; my++) {
+		for (int mx = 0; mx < num_match_blocks_x; mx++) {
+			float best_match_sad = 1e10;
+			int best_match_location[2] = { 0, 0 };
+			for (int sy = 0; sy < NUM_LCL_SAD_VALUES_Y; sy++) {
+				for (int sx = 0; sx < NUM_LCL_SAD_VALUES_X; sx++) {
+					int idx = ((my * num_match_blocks_x) + mx) * NUM_LCL_SAD_VALUES + sy * NUM_LCL_SAD_VALUES_X + sx;
+					float cur_sad = SADs[idx];
+					if (cur_sad < best_match_sad)
+					{
+						best_match_sad = cur_sad;
+						best_match_location[0] = sx - WINDOW_SIZE;
+						best_match_location[1] = sy - WINDOW_SIZE;
+					}
+				}
+			}
+			mVector v;
+			v.a = best_match_location[0];
+			v.b = best_match_location[1];
+			motion_vectors->push_back(v);
+		}
+	}
+	delete SADs;
+	return motion_vectors;
+}
+#endif
 
 Frame* computeDelta(Frame* i_frame_ycbcr, Frame* p_frame_ycbcr, std::vector<mVector>* motion_vectors){
     Frame *delta = new Frame(p_frame_ycbcr);
@@ -690,6 +781,11 @@ void encode8x8(Channel* ordered, SMatrix* encoded){
     }
 }
 
+void swap_buffers(cl_mem* a, cl_mem* b) {
+	cl_mem temp = *a;
+	*a = *b;
+	*b = temp;
+}
 
 int encode() {
     int end_frame = int(N_FRAMES);
@@ -757,8 +853,8 @@ int encode() {
 		lowPass(frame_ycbcr->gc, frame_blur_cb);
 		lowPass(frame_ycbcr->bc, frame_blur_cr);
 #else
-		lowPass_cl(out_Cb, out_Cb_blurred, frame_blur_cb);
-		lowPass_cl(out_Cr, out_Cr_blurred, frame_blur_cr);
+		lowPass_cl(Cb_buffer, Cb_blurred_buffer, frame_blur_cb);
+		lowPass_cl(Cr_buffer, Cr_blurred_buffer, frame_blur_cr);
 #endif
 
 		frame_lowpassed->Y->copy(frame_ycbcr->rc);
@@ -782,8 +878,12 @@ int encode() {
 			print("Motion Vector Search...");
 
 			gettimeofday(&starttime, NULL);
+#ifndef OpenCL
             motion_vectors = motionVectorSearch(previous_frame_lowpassed, frame_lowpassed, frame_lowpassed->width, frame_lowpassed->height);
-            gettimeofday(&endtime, NULL);
+#else
+			motion_vectors = motionVectorSearch_cl(previous_frame_lowpassed, frame_lowpassed, frame_lowpassed->width, frame_lowpassed->height);
+#endif
+			gettimeofday(&endtime, NULL);
 			runtime[2] = double(endtime.tv_sec)*1000.0f + double(endtime.tv_usec)/1000.0f - double(starttime.tv_sec)*1000.0f - double(starttime.tv_usec)/1000.0f; //in ms 
 
 			print("Compute Delta...");
@@ -801,7 +901,10 @@ int encode() {
 
 		if (frame_number > 0) delete previous_frame_lowpassed;
         previous_frame_lowpassed = new Frame(frame_lowpassed_final); 
-		
+
+		swap_buffers(&Y_buffer_prev, &Y_buffer);
+		swap_buffers(&Cb_blurred_buffer_prev, &Cb_blurred_buffer);
+		swap_buffers(&Cr_blurred_buffer_prev, &Cr_blurred_buffer);
  
         // Downsample the difference
 		print("Downsample...");
