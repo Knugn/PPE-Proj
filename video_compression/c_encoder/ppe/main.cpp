@@ -48,7 +48,7 @@ cl_mem SAD_buffer;
 int num_match_blocks_x, num_match_blocks_y, nSADsTotal, nSADBytes;
 
 perf program_perf, create_perf, write_perf, read_perf, finish_perf, cleanup_perf;
-perf total_perf, convert_perf;
+perf total_perf, convert_perf, mvs_perf, lowpass_perf;
 void init_all_perfs();
 void print_perfs();
 #endif
@@ -268,17 +268,17 @@ void convertRGBtoYCbCr_cl(Image* in, Image* out)
 {
 	cl_int error;
 
-	start_perf_measurement(&write_perf);
+	//start_perf_measurement(&write_perf);
 	//copy_data_to_device(in, out);
 	int n_input_bytes = in->width * in->height * sizeof(float);
 	copy_data_to_device(in_R, in->rc->data, n_input_bytes);
 	copy_data_to_device(in_G, in->gc->data, n_input_bytes);
 	copy_data_to_device(in_B, in->bc->data, n_input_bytes);
-	error = clFinish(opencl_queue);
-	checkError(error, "clFinish");
-	stop_perf_measurement(&write_perf);
+	//error = clFinish(opencl_queue);
+	//checkError(error, "clFinish");
+	//stop_perf_measurement(&write_perf);
 
-	start_perf_measurement(&convert_perf);
+	//start_perf_measurement(&convert_perf);
 	// Set the kernel arguments
 	error = clSetKernelArg(convert_kernel, 0, sizeof(in_R), &in_R);
 	checkError(error, "clSetKernelArg in");
@@ -298,18 +298,18 @@ void convertRGBtoYCbCr_cl(Image* in, Image* out)
 	size_t local_dimensions[1] = { opencl_cores };
 	error = clEnqueueNDRangeKernel(opencl_queue, convert_kernel, 1, NULL, global_dimensions, local_dimensions, 0, NULL, NULL);
 	checkError(error, "clEnqueueNDRangeKernel");
-	error = clFinish(opencl_queue);
-	checkError(error, "running kernel");
-	stop_perf_measurement(&convert_perf);
+	//error = clFinish(opencl_queue);
+	//checkError(error, "running kernel");
+	//stop_perf_measurement(&convert_perf);
 
-	start_perf_measurement(&read_perf);
+	//start_perf_measurement(&read_perf);
 	int n_output_bytes = out->width * out->height * sizeof(float);
 	read_back_data(Y_buffer, out->rc->data, n_output_bytes);
 	read_back_data(Cb_buffer, out->gc->data, n_output_bytes);
 	read_back_data(Cr_buffer, out->bc->data, n_output_bytes);
-	error = clFinish(opencl_queue);
-	checkError(error, "clFinish");
-	stop_perf_measurement(&read_perf);
+	//error = clFinish(opencl_queue);
+	//checkError(error, "clFinish");
+	//stop_perf_measurement(&read_perf);
 
 	
 }
@@ -404,16 +404,18 @@ Channel* lowPass_cl(cl_mem in_buffer, cl_mem out_buffer, Channel* out)
 	size_t local_dimensions[2] = { 32, 32 };
 	error = clEnqueueNDRangeKernel(opencl_queue, blur_kernel, 2, NULL, global_dimensions, local_dimensions, 0, NULL, NULL);
 	checkError(error, "clEnqueueNDRangeKernel");
-	error = clFinish(opencl_queue);
-	checkError(error, "running kernel");
+	//error = clFinish(opencl_queue);
+	//checkError(error, "running kernel");
 	//stop_perf_measurement(&convert_perf);
 
-	//start_perf_measurement(&read_perf);
+	////start_perf_measurement(&read_perf);
 	int n_output_bytes = out->width * out->height * sizeof(float);
+	//start_perf_measurement(&read_perf);
 	read_back_data(out_buffer, out->data, n_output_bytes);
-	error = clFinish(opencl_queue);
-	checkError(error, "clFinish");
 	//stop_perf_measurement(&read_perf);
+	//error = clFinish(opencl_queue);
+	//checkError(error, "clFinish");
+	////stop_perf_measurement(&read_perf);
 }
 #endif
 
@@ -489,25 +491,30 @@ std::vector<mVector>* motionVectorSearch_cl(Frame* source, Frame* match, int wid
 		Y_buffer, Cb_blurred_buffer, Cr_blurred_buffer,
 		SAD_buffer
 	};
-	for (int i = 0; i < 7; i++) {
+	for (cl_uint i = 0; i < 7; i++) {
 		error = clSetKernelArg(mvs_kernel, i+1, sizeof(args[i]), &(args[i]));
 		checkError(error, "clSetKernelArg in");
 	}
 	
 	
 	// Enqueue the kernel
+	cl_uint ndim = 3;
 	size_t work_group_size = 512;
-	size_t local_dimensions[3] = { 1, 1, work_group_size };
-	size_t global_dimensions[3] = { num_match_blocks_x, num_match_blocks_y, work_group_size };
+	size_t local_dimensions[3] = { work_group_size, 1, 1 };
+	size_t global_dimensions[3] = { work_group_size, num_match_blocks_x, num_match_blocks_y };
 	
 	error = clEnqueueNDRangeKernel(opencl_queue, mvs_kernel, 3, NULL, global_dimensions, local_dimensions, 0, NULL, NULL);
 	checkError(error, "clEnqueueNDRangeKernel");
-	error = clFinish(opencl_queue);
-	checkError(error, "running kernel");
+	//error = clFinish(opencl_queue);
+	//checkError(error, "running kernel");
 
 	
 	float* SADs = new float[nSADsTotal];
+	//start_perf_measurement(&read_perf);
 	read_back_data(SAD_buffer, SADs, nSADBytes);
+	error = clFinish(opencl_queue);
+	checkError(error, "all of it");
+	//stop_perf_measurement(&read_perf);
 	std::vector<mVector> *motion_vectors = new std::vector<mVector>(); // empty list of ints
 	for (int my = 0; my < num_match_blocks_y; my++) {
 		for (int mx = 0; mx < num_match_blocks_x; mx++) {
@@ -519,6 +526,7 @@ std::vector<mVector>* motionVectorSearch_cl(Frame* source, Frame* match, int wid
 					float cur_sad = SADs[idx];
 					if (cur_sad < best_match_sad)
 					{
+						//std::cout << "Best SAD: " << cur_sad << std::endl;
 						best_match_sad = cur_sad;
 						best_match_location[0] = sx - WINDOW_SIZE;
 						best_match_location[1] = sy - WINDOW_SIZE;
@@ -829,9 +837,9 @@ int encode() {
 		Image* frame_ycbcr = new Image(width, height, FULLSIZE);
 		gettimeofday(&starttime, NULL);
 #ifdef OpenCL
-		start_perf_measurement(&total_perf);
+		//start_perf_measurement(&convert_perf);
 		convertRGBtoYCbCr_cl(frame_rgb, frame_ycbcr);
-		stop_perf_measurement(&total_perf);
+		//stop_perf_measurement(&convert_perf);
 #else
 		convertRGBtoYCbCr(frame_rgb, frame_ycbcr);
 #endif
@@ -853,13 +861,16 @@ int encode() {
 		lowPass(frame_ycbcr->gc, frame_blur_cb);
 		lowPass(frame_ycbcr->bc, frame_blur_cr);
 #else
+		//start_perf_measurement(&lowpass_perf);
 		lowPass_cl(Cb_buffer, Cb_blurred_buffer, frame_blur_cb);
 		lowPass_cl(Cr_buffer, Cr_blurred_buffer, frame_blur_cr);
+		//stop_perf_measurement(&lowpass_perf);
 #endif
 
 		frame_lowpassed->Y->copy(frame_ycbcr->rc);
 		frame_lowpassed->Cb->copy(frame_blur_cb);
         frame_lowpassed->Cr->copy(frame_blur_cr);
+
 		gettimeofday(&endtime, NULL);
 		runtime[1] = double(endtime.tv_sec)*1000.0f + double(endtime.tv_usec)/1000.0f - double(starttime.tv_sec)*1000.0f - double(starttime.tv_usec)/1000.0f; //in ms   
         
@@ -881,7 +892,9 @@ int encode() {
 #ifndef OpenCL
             motion_vectors = motionVectorSearch(previous_frame_lowpassed, frame_lowpassed, frame_lowpassed->width, frame_lowpassed->height);
 #else
+			//start_perf_measurement(&mvs_perf);
 			motion_vectors = motionVectorSearch_cl(previous_frame_lowpassed, frame_lowpassed, frame_lowpassed->width, frame_lowpassed->height);
+			//stop_perf_measurement(&mvs_perf);
 #endif
 			gettimeofday(&endtime, NULL);
 			runtime[2] = double(endtime.tv_sec)*1000.0f + double(endtime.tv_usec)/1000.0f - double(starttime.tv_sec)*1000.0f - double(starttime.tv_usec)/1000.0f; //in ms 
@@ -902,10 +915,12 @@ int encode() {
 		if (frame_number > 0) delete previous_frame_lowpassed;
         previous_frame_lowpassed = new Frame(frame_lowpassed_final); 
 
+#ifdef OpenCL
 		swap_buffers(&Y_buffer_prev, &Y_buffer);
 		swap_buffers(&Cb_blurred_buffer_prev, &Cb_blurred_buffer);
 		swap_buffers(&Cr_blurred_buffer_prev, &Cr_blurred_buffer);
- 
+#endif
+
         // Downsample the difference
 		print("Downsample...");
 		
@@ -1025,6 +1040,7 @@ int encode() {
 int main(int argc, const char * argv[]) {
 	auto begin = chrono::high_resolution_clock::now();
 #ifdef OpenCL
+	start_perf_measurement(&total_perf);
 	if (argc == 2) {
 		opencl_cores = atoi(argv[1]);
 	}
@@ -1045,6 +1061,7 @@ int main(int argc, const char * argv[]) {
 #endif
     encode();
 #ifdef OpenCL
+	stop_perf_measurement(&total_perf);
 	print_perfs();
 #endif
 	auto end = chrono::high_resolution_clock::now();
@@ -1065,6 +1082,8 @@ void init_all_perfs() {
 	init_perf(&read_perf);
 	init_perf(&finish_perf);
 	init_perf(&cleanup_perf);
+	init_perf(&mvs_perf);
+	init_perf(&lowpass_perf);
 
 }
 
@@ -1073,6 +1092,10 @@ void print_perfs() {
 	print_perf_measurement(&total_perf);
 	printf("Convert Kernel:  ");
 	print_perf_measurement(&convert_perf);
+	printf("MVS Kernel:  ");
+	print_perf_measurement(&mvs_perf);
+	printf("Lowpass Kernel:  ");
+	print_perf_measurement(&lowpass_perf);
 
 	printf("Read Data:      ");
 	print_perf_measurement(&read_perf);
